@@ -218,9 +218,10 @@ const verifyAndProve = await pipeline(
       { label: `relevant:${f.file.split('/').pop()}:${f.line}`, phase: 'Verify', schema: RELEVANT, ...MID },
     )
     return Promise.all([correctness, relevance]).then(([c, r]) => {
-      // A verifier that died is not a refutation: the finding stays, as a question, and is logged.
-      if (!c) log(`correctness verifier returned nothing for ${f.file}:${f.line}; kept as a question`)
       if (!r) log(`relevance verifier returned nothing for ${f.file}:${f.line}; treated as relevant`)
+      // A verifier that died is not a refutation, and not a pass on relevance either.
+      const survives = (!c || !c.refuted) && (!r || r.relevant)
+      if (!c) log(`correctness verifier returned nothing for ${f.file}:${f.line}; ${survives ? 'kept as a question' : 'dropped as irrelevant'}`)
       return {
         ...f,
         correctness: c,
@@ -228,7 +229,7 @@ const verifyAndProve = await pipeline(
         unverified: !c,
         severity: !c ? 'question' : !c.refuted ? c.severity : f.severity,
         line: c && c.corrected_line ? c.corrected_line : f.line,
-        survives: !c || (!c.refuted && (!r || r.relevant)),
+        survives,
       }
     })
   },

@@ -19,7 +19,9 @@ whenever its topic was relevant. → *step Verify*
 
 **A verifier that died is not a refutation.** In 0.1.0 a missing correctness verdict marked the
 finding as not surviving, with nothing in the log. A real defect could vanish because an agent
-did. → *step Verify*
+did. 0.2.1 overcorrected: such a finding survived even when relevance called it noise, so a
+dead correctness verifier let noise through. It now stays as a question only if relevance keeps
+it, and the log says which. → *step Verify*
 
 **Dedup before verification.** Without it, two lenses that reported one defect got two
 verifications, which came back with opposite verdicts on the same line. → *step Dedup*

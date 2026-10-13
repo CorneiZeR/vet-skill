@@ -185,8 +185,9 @@ What it does, and why:
    call it noise. A relevance "yes" never outvotes a refutation; that is how a false claim
    would reach the request. The verifier also corrects the line number.
 
-   A verifier that returns nothing (skipped, or died) is not a refutation. The finding stays
-   as a **question** and the run logs it, rather than letting it vanish.
+   A correctness verifier that returns nothing (skipped, or died) is not a refutation. The
+   finding stays as a **question** and the run logs it, rather than letting it vanish; the
+   relevance verdict still applies to it.
 4. **Prove.** Every surviving blocker and should-fix is reproduced by a command in the
    prover's own worktree: a failing test, a script, the build, a grep that comes back
    non-empty. The output is kept verbatim. A finding that nothing reproduces becomes a
