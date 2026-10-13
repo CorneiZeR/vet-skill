@@ -373,9 +373,9 @@ UI. Submitting from the web UI themselves is just as good, and needs nothing fro
    not open the earlier `REVIEW.md` and do not hand earlier comments to the lenses.
    - Reading them first turns the pass into a checklist walk: it confirms the known
      findings from their old output and never notices the wrong ones.
-   - A carried-over finding is how a review states something false. One cited a path that
-     never existed, so every grep scoped to it came back empty, and that emptiness read as
-     confirmation.
+   - A finding carried over is checked with its old command, and an old command can confirm
+     by finding nothing: a grep scoped to a path that has since moved returns empty, which
+     looks exactly like "the problem is still there".
 2. **Then reconcile.** Pass the earlier findings as `args.previous`; they come from
    `$RUN/REVIEW.md` if this session still has it, otherwise from the threads `status` marks
    `(ours)`. The Reconcile phase re-runs each reproduction at this tip. Each one ends as

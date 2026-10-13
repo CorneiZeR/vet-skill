@@ -1,6 +1,6 @@
 {
   "name": "vet",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A full review pass for GitLab merge requests and GitHub pull requests: lenses derived from the diff, every finding adversarially verified and the serious ones reproduced by a command, a mutation pass for behaviour no test pins, an optional CodeRabbit CLI second opinion, and the result staged as private drafts that are published only on your word.",
   "author": {
     "name": "Oleksii Kolosiuk"

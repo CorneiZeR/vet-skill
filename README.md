@@ -154,6 +154,10 @@ been exercised against live GitLab and GitHub requests.
 
 Why each rule exists: [`WHY-IT-EXISTS.md`](WHY-IT-EXISTS.md).
 
+## Thanks
+
+To [Danipulok](https://github.com/Danipulok) for reviewing it.
+
 ## License
 
 MIT
