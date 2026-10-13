@@ -1,5 +1,5 @@
-// Template for the review Workflow. Copy it, replace LENSES with prompts written for THIS diff,
-// and pass it inline to the Workflow tool with args:
+// Template for the review Workflow. Copy it to the run's directory, replace only LENSES with
+// prompts written for THIS diff, and run the copy by scriptPath with args:
 //   {wt, diff, base, head, title, scratch, testCommand, tier, previous}
 // wt: the review worktree; scratch: a directory agents may create their own worktrees under;
 // testCommand: what the baseline ran ('' when the project has no runnable suite);
@@ -9,7 +9,7 @@ export const meta = {
   name: 'vet',
   description: 'Review an MR/PR through diff-derived lenses, dedup, verify, prove by running, mutate',
   phases: [
-    { title: 'Review', detail: 'lenses read the diff; mutation pass runs alongside' },
+    { title: 'Review', detail: 'lenses read the diff; the mutation pass starts in the run queue' },
     { title: 'Dedup' },
     { title: 'Verify', detail: 'correctness gate, then relevance' },
     { title: 'Prove', detail: 'blockers and should-fix reproduced by a command' },
@@ -27,7 +27,7 @@ const MID_LOW = tier('sonnet', 'low')
 const CHEAP = tier('haiku', 'low')
 
 const COMMON = `You are reviewing: ${args.title}.
-The head ${args.head} is checked out at ${args.wt}. Treat that worktree as read-only.
+The head ${args.head} is checked out at ${args.wt}. Treat that worktree as read-only, and do not run the test suite, a build or anything heavy: read and grep. Runs belong to the prove and mutation steps, which take turns.
 Merge base: ${args.base}. Full diff: ${args.diff}.
 Judge against the repository's CLAUDE.md, the docs it links to, and its own review skill if one exists (severity: blocker / should-fix / nit).
 Do not invent conventions the repository does not write down.
@@ -35,7 +35,7 @@ Read the surrounding code, callers and installed libraries, not just the diff, a
 Every finding needs: file (repo-relative); line (in the HEAD file); in_diff (true if that line is an added line); a concrete failure scenario; a concrete fix; evidence.
 Report only real, specific issues. An empty list is fine.`
 
-const OWN_WORKTREE = (label) => `You need a checkout you may modify. Create your own and never touch ${args.wt}:
+const OWN_WORKTREE = (label) => `You are a run step: you may run tests, builds and scripts, but only inside your own checkout. Create it and never touch ${args.wt}:
   git -C ${args.wt} worktree add --detach ${args.scratch}/wt-${label} ${args.head}
 Work only inside it and remove it when done:
   git -C ${args.wt} worktree remove --force ${args.scratch}/wt-${label}`
@@ -146,17 +146,27 @@ const RECONCILED = {
   required: ['status', 'command', 'output', 'explanation'],
 }
 
+// Every agent that runs commands goes through this queue, one at a time: several test suites
+// at once in several worktrees have hung the machine. Reading agents stay parallel.
+let runQueue = Promise.resolve()
+const serially = (start) => {
+  const next = runQueue.then(start, start)
+  runQueue = next.catch(() => null)
+  return next
+}
+
 phase('Review')
 const mutationRun = args.testCommand
-  ? agent(
+  ? serially(() => agent(
       `${COMMON}\n\n${OWN_WORKTREE('mutation')}\n\nMUTATION PASS. Test command: ${args.testCommand}\n` +
         `Run it once unmodified and record the summary line as baseline. Then, for each BEHAVIOUR the diff added ` +
         `(a branch of a conditional, a guard, a filter clause, an element of a sort key, a validation; not plumbing), ` +
         `delete or neutralise that one thing, print \`git diff --stat\` and the changed lines, run the suite, record the result, ` +
-        `and restore the file with \`git checkout -- <file>\` inside YOUR worktree before the next one. One mutation per run. ` +
+        `then restore YOUR worktree with \`git reset --hard -q && git clean -fdq\` (that also removes files a run created) and confirm ` +
+        `\`git status --porcelain\` prints nothing before the next one. One mutation per run. ` +
         `An empty diff --stat means the mutation did not apply: record not-applied, never green. At most 12 mutations, the riskiest first.`,
       { label: 'mutation', phase: 'Review', schema: MUTATIONS, ...MID },
-    )
+    ))
   : Promise.resolve(null)
 const reviews = await parallel(
   LENSES.map((l) => () =>
@@ -207,23 +217,32 @@ const verifyAndProve = await pipeline(
         `or noise, out of scope, or handled elsewhere? Assume the claim is true.\n\nFINDING: ${JSON.stringify(f)}`,
       { label: `relevant:${f.file.split('/').pop()}:${f.line}`, phase: 'Verify', schema: RELEVANT, ...MID },
     )
-    return Promise.all([correctness, relevance]).then(([c, r]) => ({
-      ...f,
-      correctness: c,
-      relevance: r,
-      severity: c && !c.refuted ? c.severity : f.severity,
-      line: c && c.corrected_line ? c.corrected_line : f.line,
-      survives: Boolean(c && !c.refuted && (!r || r.relevant)),
-    }))
+    return Promise.all([correctness, relevance]).then(([c, r]) => {
+      // A verifier that died is not a refutation: the finding stays, as a question, and is logged.
+      if (!c) log(`correctness verifier returned nothing for ${f.file}:${f.line}; kept as a question`)
+      if (!r) log(`relevance verifier returned nothing for ${f.file}:${f.line}; treated as relevant`)
+      return {
+        ...f,
+        correctness: c,
+        relevance: r,
+        unverified: !c,
+        severity: !c ? 'question' : !c.refuted ? c.severity : f.severity,
+        line: c && c.corrected_line ? c.corrected_line : f.line,
+        survives: !c || (!c.refuted && (!r || r.relevant)),
+      }
+    })
   },
   (f, _item, i) => {
-    if (!f.survives || f.severity === 'nit') return f
-    return agent(
+    if (!f.survives || f.severity === 'nit' || f.severity === 'question') return f
+    return serially(() => agent(
       `${COMMON}\n\n${OWN_WORKTREE(`prove-${i}`)}\n\nREPRODUCE this finding by RUNNING something: a failing test you write, ` +
         `a short script, the build, a grep that comes back non-empty, two runs that disagree. Paste the command and its output VERBATIM. ` +
         `If nothing you can run shows it, say reproduced=false and why; do not argue it from reading.\n\nFINDING: ${JSON.stringify(f)}`,
       { label: `prove:${f.file.split('/').pop()}:${f.line}`, phase: 'Prove', schema: PROOF, ...MID },
-    ).then((p) => ({ ...f, proof: p, severity: p && p.reproduced ? f.severity : 'question' }))
+    )).then((p) => {
+      if (!p) log(`prover returned nothing for ${f.file}:${f.line}; kept as a question`)
+      return { ...f, proof: p, severity: p && p.reproduced ? f.severity : 'question' }
+    })
   },
 )
 
@@ -232,13 +251,13 @@ if (Array.isArray(args.previous) && args.previous.length) {
   phase('Reconcile')
   reconciled = await parallel(
     args.previous.map((p, i) => () =>
-      agent(
+      serially(() => agent(
         `${COMMON}\n\n${OWN_WORKTREE(`reconcile-${i}`)}\n\nAn EARLIER review round claimed the finding below. Re-run its reproduction ` +
           `against THIS head, from scratch; never reuse its old output. still-open: it reproduces today (paste today's output). ` +
           `closed: it no longer reproduces; name the commit and file:line that closed it. withdrawn: it was wrong, or names a path, ` +
           `symbol or flag that does not exist; say what is actually true.\n\nEARLIER FINDING: ${JSON.stringify(p)}`,
         { label: `reconcile:${i}`, phase: 'Reconcile', schema: RECONCILED, ...MID },
-      ).then((v) => v && { previous: p, ...v }),
+      )).then((v) => v && { previous: p, ...v }),
     ),
   )
 }

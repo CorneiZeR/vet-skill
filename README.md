@@ -24,7 +24,8 @@ and stops with drafts staged on the request:
 4. **Verification.** Every finding has to survive an attempt to refute it. Correctness is the
    gate; a "relevant" vote never outvotes a refutation.
 5. **Proof.** Every blocker and should-fix is reproduced by a command in its own worktree, with
-   the output kept verbatim. What nothing reproduces is staged as a question, not a claim.
+   the output kept verbatim. Agents that run things take turns, so one review never starts
+   several test suites at once. What nothing reproduces is staged as a question, not a claim.
 6. **Mutation.** Deletes each behaviour the change added, one at a time, and re-runs the suite.
    A green run is a finding: that behaviour ships untested.
 7. **CodeRabbit.** An optional second opinion. Its findings are merged with the rest and
@@ -45,12 +46,12 @@ before anything is written:
 
 | Refused | Why |
 | --- | --- |
-| Publishing without `--expect <n>` matching what is staged | drafts may have been edited or added in the web UI since you looked |
+| Publishing unless `--expect` matches the fingerprint of what is staged now | a draft may have been edited, deleted or added in the web UI since you looked; a count alone would miss an edit |
 | A review made at an older head | old findings anchored on new code |
 | An inline comment on a line the change did not add | the forge rejects it, or anchors it somewhere else |
 | A second set of drafts beside an existing one | `--replace-drafts`, and only with your word |
 | A comment where our own open thread already sits | reply there instead |
-| A link pinned to any commit but the reviewed tip | the line it points at has moved |
+| A link into the reviewed repository pinned to any commit but the tip | the line it points at has moved; permalinks to other repositories are left alone |
 | An attribution line (`Generated with Claude`, `Co-Authored-By: Claude`) | the review is yours |
 
 It never approves, requests changes, merges, pushes, or resolves a thread.
@@ -121,11 +122,11 @@ defect.
 `skills/vet/scripts/vet.py` works without the skill:
 
 ```bash
-vet.py status  <URL>                      # head, threads, staged drafts; writes nothing
+vet.py status  <URL>                      # head, threads, staged drafts and their fingerprint; writes nothing
 vet.py check   <URL> review.json          # every refusal above; writes nothing
 vet.py draft   <URL> review.json          # stage, then read back and verify the anchors
 vet.py discard <URL>                      # delete your staged drafts
-vet.py publish <URL> --expect <n>         # publish, only if exactly n are staged
+vet.py publish <URL> --expect <fp>        # publish, only if the staged drafts still match that fingerprint
 vet.py coderabbit <worktree> --base <sha> --out cr.txt [--skip]
 ```
 
@@ -137,8 +138,8 @@ The `review.json` format is in the script's docstring.
   summary with a link.
 - **GitLab multi-line anchors.** Comments anchor on one line; a suggestion widens with
   `suggestion:-a+b`.
-- **Very large GitHub files.** The forge sends no patch for them, so nothing in them can be
-  anchored.
+- **Very large or collapsed files.** GitHub sends no patch and GitLab an empty diff for them, so
+  nothing in them can be anchored; the check says so rather than calling the line wrong.
 - **More than 100 GitHub review threads.** Only the first 100 are read, and the script says so.
 
 ## Tests

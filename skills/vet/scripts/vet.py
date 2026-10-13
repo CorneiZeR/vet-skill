@@ -5,14 +5,15 @@
     vet.py check   <request URL> <review.json>
     vet.py draft   <request URL> <review.json> [--replace-drafts]
     vet.py discard <request URL>
-    vet.py publish <request URL> --expect <n>
+    vet.py publish <request URL> --expect <fingerprint>
     vet.py coderabbit <worktree> --base <merge base> --out <file> [--skip]
 
 The forge is picked from the URL, and `glab` or `gh` does the talking with whatever login it
 already has. `status` and `check` write nothing. `draft` stages inline comments and one summary
 as drafts: draft notes on GitLab, one pending review on GitHub. Only `publish` makes anything
-visible to other people, and it refuses unless the number of staged drafts is the number the
-caller last saw.
+visible to other people, and it refuses unless the staged drafts are exactly the ones the caller
+last saw: `status` prints a fingerprint of them (ids, anchors and full bodies), and `publish`
+needs it back.
 
 review.json:
 
@@ -31,6 +32,7 @@ from __future__ import annotations
 import abc
 import argparse
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -53,7 +55,8 @@ _GITLAB_URL = re.compile(r"^https://(?P<host>[^/]+)/(?P<project>.+?)/-/merge_req
 _GITHUB_URL = re.compile(r"^https://(?P<host>[^/]+)/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)")
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
 _ATTRIBUTION = re.compile(r"Generated with \[?Claude|Co-Authored-By:\s*Claude|\N{ROBOT FACE}", re.IGNORECASE)
-_BLOB_LINK = re.compile(r"/blob/(?P<sha>[0-9a-f]{7,40})/")
+_BLOB_LINK = re.compile(r"(?P<repo>https?://[^\s()<>\[\]\"']+?)(?:/-)?/blob/(?P<sha>[0-9a-f]{7,40})/")
+_REQUEST_SUFFIX = re.compile(r"(?:/-/merge_requests|/pull)/\d+.*$")
 _SUGGESTION_FENCE = re.compile(r"^\s*```suggestion(?P<range>\S*)\s*$", re.MULTILINE)
 _CODERABBIT_NOISE = re.compile(
     r"posthog|^\s+at |^\s*(path|errno|code):|Unable to connect|elapsed$|update available|coderabbit update"
@@ -98,7 +101,19 @@ class Draft:
     id: str
     path: str | None
     line: int | None
-    excerpt: str
+    body: str
+
+    @property
+    def excerpt(self) -> str:
+        return _excerpt(self.body)
+
+
+def fingerprint(drafts: list[Draft]) -> str:
+    """`<count>-<hash>` over every draft's id, anchor and full body: an edit changes it, not only a count."""
+    digest = hashlib.sha256()
+    for draft in sorted(drafts, key=lambda d: d.id):
+        digest.update(f"{draft.id}\0{draft.path}\0{draft.line}\0{draft.body}\0".encode())
+    return f"{len(drafts)}-{digest.hexdigest()[:12]}"
 
 
 @dataclasses.dataclass
@@ -272,17 +287,22 @@ class GitLab(Forge):
                     id=str(note["id"]),
                     path=position.get("new_path"),
                     line=position.get("new_line"),
-                    excerpt=_excerpt(note.get("note", "")),
+                    body=note.get("note", ""),
                 )
             )
         return drafts
 
     def files(self) -> dict[str, FileLines]:
-        return {
-            entry["new_path"]: parse_patch(entry.get("diff") or "", old_path=entry["old_path"])
-            for entry in self._get_all(f"{self._base}/diffs?per_page=100")
-            if not entry.get("deleted_file")
-        }
+        files = {}
+        for entry in self._get_all(f"{self._base}/diffs?per_page=100"):
+            if entry.get("deleted_file"):
+                continue
+            diff = entry.get("diff") or ""
+            lines = parse_patch(diff, old_path=entry["old_path"])
+            # A collapsed or too-large diff comes back as an empty string, not as an error.
+            lines.patch_missing = bool(entry.get("too_large") or entry.get("collapsed") or not diff.strip())
+            files[entry["new_path"]] = lines
+        return files
 
     def forge_problems(self, review: dict[str, Any]) -> list[str]:
         problems = []
@@ -476,12 +496,12 @@ class GitHub(Forge):
                 id=str(c["id"]),
                 path=c["path"],
                 line=c.get("line") or files.get(c["path"], FileLines(old_path="")).line_at.get(c.get("position")),
-                excerpt=_excerpt(c["body"]),
+                body=c["body"],
             )
             for c in comments
         ]
         if review.get("body"):
-            drafts.append(Draft(id=f"review {review['id']}", path=None, line=None, excerpt=_excerpt(review["body"])))
+            drafts.append(Draft(id=f"review {review['id']}", path=None, line=None, body=review["body"]))
         return drafts
 
     def files(self) -> dict[str, FileLines]:
@@ -580,6 +600,7 @@ def problems_with(
     """Everything that stops a review from being staged, and everything merely worth a look."""
     problems: list[str] = []
     warnings: list[str] = []
+    repository = _REQUEST_SUFFIX.sub("", request.url)
     if not request.is_open:
         problems.append(f"{request.url} is not open")
     if review.get("head_sha") != request.head_sha:
@@ -632,9 +653,10 @@ def problems_with(
             problems.append(f"{where}: carries an attribution line")
         if len(body) > _GITHUB_BODY_LIMIT:
             problems.append(f"{where}: {len(body)} characters; the forge limit is about {_GITHUB_BODY_LIMIT}")
+        # Only this repository's links must point at the tip; a permalink elsewhere is evidence.
         for link in _BLOB_LINK.finditer(body):
-            if link["sha"] != request.head_sha:
-                problems.append(f"{where}: a link pinned to {link['sha']}, not to the full reviewed tip")
+            if link["repo"].lower() == repository.lower() and link["sha"] != request.head_sha:
+                problems.append(f"{where}: a link into this repository pinned to {link['sha']}, not to the full reviewed tip")
     problems += forge.forge_problems(review)
     return problems, warnings
 
@@ -686,6 +708,8 @@ def cmd_status(forge: Forge, _args: argparse.Namespace) -> None:
     for draft in drafts:
         where = f"{draft.path}:{draft.line}" if draft.path else "summary/reply"
         _say(f"  {draft.id} {where} {draft.excerpt}")
+    if drafts:
+        _say(f"fingerprint: {fingerprint(drafts)}  (publish --expect takes this)")
 
 
 def coderabbit_pass(worktree: str, *, base: str, out: str, skip: bool) -> str:
@@ -762,11 +786,12 @@ def cmd_discard(forge: Forge, _args: argparse.Namespace) -> None:
 
 def cmd_publish(forge: Forge, args: argparse.Namespace) -> None:
     drafts = forge.drafts()
-    if len(drafts) != args.expect:
+    now = fingerprint(drafts)
+    if now != args.expect:
         listing = "\n".join(f"  {d.id} {d.path or 'summary/reply'}:{d.line or ''} {d.excerpt}" for d in drafts)
         raise Refused(
-            f"refused: {len(drafts)} drafts are staged, the approval was for {args.expect}. "
-            f"Show the user what is there now:\n{listing}"
+            f"refused: the staged drafts are {now}, the approval was for {args.expect}; something was "
+            f"edited, deleted or added since. Show the user what is there now:\n{listing}"
         )
     forge.publish()
     _say(f"published {len(drafts)} drafts on {forge.request().url}")
@@ -784,7 +809,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("discard").add_argument("url")
     publish = sub.add_parser("publish")
     publish.add_argument("url")
-    publish.add_argument("--expect", type=int, required=True)
+    publish.add_argument("--expect", required=True, help="the fingerprint `status` printed")
     rabbit = sub.add_parser("coderabbit")
     rabbit.add_argument("worktree")
     rabbit.add_argument("--base", required=True, help="the merge base commit")

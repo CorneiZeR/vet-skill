@@ -81,13 +81,31 @@ lines. → *`draft`*
 somebody else's request is not something to undo, and the person running the review wants to
 read it first. Drafts cost nothing to discard. → *The contract*
 
-**`publish --expect`.** Between staging and publishing, the user may edit, delete or add drafts
-in the web UI. Publishing "whatever is there" would send something nobody approved.
+**`publish --expect` takes a fingerprint, not a count.** Between staging and publishing, the
+user may edit, delete or add drafts in the web UI. Publishing "whatever is there" would send
+something nobody approved. The first version compared only the number of drafts, so an edited
+draft, or one deleted and another added, passed. A review of that version caught it.
 → *Publishing*
+
+**Only this repository's links must point at the tip.** The first version refused every
+`/blob/<sha>/` link that was not the reviewed head, which also refused permalinks into other
+repositories: exactly the kind of evidence the proof rule asks for. → *step 7*
 
 **One message's worth of noise.** A review posted as a summary that retold every inline comment,
 with metadata and folded baselines, came to about 700 words and six notifications per request,
 and was read as noise. The summary now holds only what cannot be anchored. → *step 7*
+
+**Agents that run things take turns.** The first template started the mutation pass alongside
+the lenses and every prover in parallel, each in its own worktree: as many concurrent test suites
+as there were findings. That is the load that has hung a machine. → *step 4*
+
+**A mutation is undone with `reset --hard` and `clean`, not `checkout -- <file>`.** Restoring
+only the edited file left behind whatever the run created, and the next mutation ran on a dirty
+tree. → *step 4, Mutation*
+
+**A verifier that died is not a refutation.** In the first template a missing correctness
+verdict set the finding to not surviving, with nothing in the log: a real defect could vanish
+because an agent did. → *step 4, Verify*
 
 **Findings go to disk as they are found.** A run reviewing several requests kept the findings
 in the conversation to write them at the end. A context compaction landed first.

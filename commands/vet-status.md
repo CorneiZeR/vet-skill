@@ -1,12 +1,12 @@
 ---
-allowed-tools: Bash(python3:*)
+allowed-tools: Bash(python3 -I ${CLAUDE_PLUGIN_ROOT}/skills/vet/scripts/vet.py status *)
 argument-hint: <MR/PR URL>
 description: What is on a merge or pull request now - its head, every thread, and the drafts you have staged
 ---
 
 ## Where the request stands
 
-!`python3 -I "${CLAUDE_PLUGIN_ROOT}/skills/vet/scripts/vet.py" status $ARGUMENTS`
+!`python3 -I ${CLAUDE_PLUGIN_ROOT}/skills/vet/scripts/vet.py status $ARGUMENTS`
 
 ## Your task
 

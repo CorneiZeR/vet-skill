@@ -170,8 +170,13 @@ inline. That keeps the template out of the prompt. Pass `args`:
 
 What it does, and why:
 
-1. **Review.** The lenses run in parallel, read-only on the shared worktree. The mutation
-   pass runs alongside in its own worktree when there is a test command.
+1. **Review.** The lenses run in parallel, read-only on the shared worktree; they read and
+   grep, and never run the suite or a build. The mutation pass starts at the same time in its
+   own worktree when there is a test command.
+
+   **Every agent that runs something takes its turn.** Mutation, the provers and the
+   reconcile step go through one queue, one at a time. Several test suites at once, each in
+   its own worktree, hang a machine. Reading agents stay parallel.
 2. **Dedup.** This is the one barrier. Without it, one defect gets two verdicts that can
    disagree. When unsure, it keeps findings apart: a wrong merge loses a finding, a missed
    merge only costs a verification.
@@ -179,6 +184,9 @@ What it does, and why:
    only if the correctness verifier fails to refute it and the relevance verifier does not
    call it noise. A relevance "yes" never outvotes a refutation; that is how a false claim
    would reach the request. The verifier also corrects the line number.
+
+   A verifier that returns nothing (skipped, or died) is not a refutation. The finding stays
+   as a **question** and the run logs it, rather than letting it vanish.
 4. **Prove.** Every surviving blocker and should-fix is reproduced by a command in the
    prover's own worktree: a failing test, a script, the build, a grep that comes back
    non-empty. The output is kept verbatim. A finding that nothing reproduces becomes a
@@ -187,6 +195,8 @@ What it does, and why:
    - **Green** is a finding: the behaviour ships untested. Coverage percentages cannot show
      this; every deleted line was executed, just never asserted on.
    - **Red** kills any lens claim that this behaviour lacks tests.
+   - After each run the worktree is reset with `git reset --hard && git clean -fd`, which
+     also removes files the run created, and must show a clean `git status` before the next.
    - `git diff --stat` is printed before every run. A mutation that did not apply reports
      the same green as an untested path.
 6. **Reconcile.** Re-review only; see `## Re-review`.
@@ -284,8 +294,9 @@ in `$RUN/wt`.
 5. The reproduction, folded and verbatim:
    `<details><summary>Reproduction</summary>…</details>`
 
-Links are pinned to the reviewed tip, three at most; `$VET` refuses a link pinned to another
-commit.
+Links into the reviewed repository are pinned to the reviewed tip, three at most; `$VET`
+refuses one pinned to another commit. A permalink into another repository (a library, an
+upstream fix) is evidence and is left alone.
 
 **The summary holds only what the inline comments cannot:**
 - the verdict;
@@ -317,7 +328,7 @@ python3 -I $VET draft '<URL>' "$RUN/review.json"
 - an anchor is not an added line;
 - two comments sit on one line;
 - an attribution line appears;
-- a link is pinned to the wrong commit;
+- a link into this repository is pinned to another commit;
 - a GitLab reply names an unknown thread, or a GitHub reply is staged at all;
 - drafts are already staged.
 
@@ -347,9 +358,11 @@ Only after the user's explicit approval for this request in this conversation.
 
 1. Run `python3 -I $VET status '<URL>'`. The user may have edited, deleted or added drafts
    in the web UI, so what is staged is read from the forge, never from `review.json`.
-2. Tell the user the count `status` printed.
-3. Run `python3 -I $VET publish '<URL>' --expect <that count>`. A different count is refused,
-   and the drafts are listed instead.
+2. Show the user the drafts it lists. Under them `status` prints a fingerprint: the count
+   plus a hash over every draft's id, anchor and full body.
+3. Run `python3 -I $VET publish '<URL>' --expect <that fingerprint>`. If anything was edited,
+   deleted or added since, the fingerprint differs and the publish is refused with the new
+   listing. A count alone would let an edited draft through.
 
 GitHub submits as `COMMENT`. Approving or requesting changes is the user's button in the web
 UI. Submitting from the web UI themselves is just as good, and needs nothing from this skill.
@@ -408,7 +421,8 @@ UI. Submitting from the web UI themselves is just as good, and needs nothing fro
 - A 422 means a line outside the diff.
 - There is one pending review per user per pull request.
 - The forge sends no `patch` for very large files. Nothing in them can be anchored, so they
-  go in the summary.
+  go in the summary. GitLab does the same with an empty `diff` for a collapsed or too-large
+  file; `$VET` reports both as "no patch", not as a bad anchor.
 
 **Git**
 - A clean `git merge-tree` exit 1 also means "not something we can merge". Only `CONFLICT`

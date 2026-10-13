@@ -13,6 +13,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 VET = HERE.parent / "skills" / "vet" / "scripts" / "vet.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / "vet" / "scripts"))
+import vet  # noqa: E402
+
 HEAD = "a" * 40
 OLD = "b" * 40
 GL = "projects/g%2Fp/merge_requests/7"
@@ -171,6 +174,26 @@ class VetTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("not to the full reviewed tip", done.stderr)
 
+    def test_permalink_into_another_repository_is_evidence_not_a_stale_anchor(self):
+        linked = review(summary=f"Upstream does it at [lib](https://github.com/other/lib/blob/{OLD}/x.py#L9).")
+        done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=linked)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+        gitlab_linked = review(summary=f"See [x](https://gitlab.com/g/p/-/blob/{OLD}/app.py#L2).")
+        done, _ = self.run_vet(gitlab_state(), "check", GL_URL, review_body=gitlab_linked)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("into this repository", done.stderr)
+
+    def test_collapsed_gitlab_diff_says_no_patch(self):
+        state = gitlab_state()
+        state["routes"][f"GET {GL}/diffs?per_page=100"] = [
+            {"new_path": "app.py", "old_path": "app.py", "diff": "", "collapsed": True}
+        ]
+        done, _ = self.run_vet(state, "check", GL_URL, review_body=review())
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("no patch", done.stderr)
+        self.assertNotIn("not an added line", done.stderr)
+
     def test_existing_drafts_block_a_second_set_unless_replacing(self):
         staged = gitlab_state(drafts=[{"id": 5, "note": "old"}])
         done, state = self.run_vet(staged, "draft", GL_URL, review_body=review())
@@ -234,13 +257,17 @@ class VetTest(unittest.TestCase):
         self.assertIn("replies cannot be staged", done.stderr)
         self.assertIn("plain ```suggestion fence", done.stderr)
 
-    def test_publish_refuses_a_count_the_user_did_not_see(self):
-        staged = gitlab_state(drafts=[{"id": 5, "note": "a"}, {"id": 6, "note": "b"}])
-        done, state = self.run_vet(staged, "publish", GL_URL, "--expect", "1")
+    def test_publish_refuses_drafts_the_user_did_not_see(self):
+        seen = [vet.Draft(id="5", path=None, line=None, body="a"), vet.Draft(id="6", path=None, line=None, body="b")]
+        approved = vet.fingerprint(seen)
+        edited = gitlab_state(drafts=[{"id": 5, "note": "a"}, {"id": 6, "note": "b, edited in the web UI"}])
+        done, state = self.run_vet(edited, "publish", GL_URL, "--expect", approved)
         self.assertEqual(done.returncode, 1)
+        self.assertIn("edited, deleted or added", done.stderr)
         self.assertEqual(state.get("writes", []), [])
 
-        done, state = self.run_vet(staged, "publish", GL_URL, "--expect", "2")
+        staged = gitlab_state(drafts=[{"id": 5, "note": "a"}, {"id": 6, "note": "b"}])
+        done, state = self.run_vet(staged, "publish", GL_URL, "--expect", approved)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(state["writes"][0]["path"].endswith("/draft_notes/bulk_publish"))
 
@@ -248,7 +275,8 @@ class VetTest(unittest.TestCase):
         pending = github_state(
             reviews=[{"id": 900, "state": "PENDING", "user": {"login": "me"}, "body": "S", "comments": []}]
         )
-        done, state = self.run_vet(pending, "publish", GH_URL, "--expect", "1")
+        approved = vet.fingerprint([vet.Draft(id="review 900", path=None, line=None, body="S")])
+        done, state = self.run_vet(pending, "publish", GH_URL, "--expect", approved)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(state["writes"][0]["payload"], {"event": "COMMENT", "body": "S"})
 
