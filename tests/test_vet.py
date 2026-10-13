@@ -262,6 +262,49 @@ class VetTest(unittest.TestCase):
         self.assertIn("no patch", done.stderr)
         self.assertNotIn("not an added line", done.stderr)
 
+    def test_gitlab_file_adding_no_line_points_at_the_summary_not_at_a_missing_patch(self):
+        flags = {"collapsed": False, "too_large": False}
+        for entry in (
+            {"new_path": "app.py", "old_path": "old.py", "diff": "", "renamed_file": True, **flags},
+            {"new_path": "app.py", "old_path": "app.py", "diff": "", "a_mode": "100644", "b_mode": "100755", **flags},
+            {"new_path": "app.py", "old_path": "app.py", "diff": "@@ -1,3 +1,2 @@\n a\n-b\n c\n", **flags},
+            {"new_path": "app.py", "old_path": "old.py", "diff": "", "renamed_file": True, "too_large": False},
+            {"new_path": "app.py", "old_path": "old.py", "diff": "", "renamed_file": True, "collapsed": False},
+        ):
+            state = gitlab_state()
+            state["routes"][f"GET {GL}/diffs?per_page=100"] = [entry]
+            done, _ = self.run_vet(state, "check", GL_URL, review_body=review())
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("adds no line to this file", done.stderr)
+            self.assertNotIn("no patch", done.stderr)
+            self.assertNotIn("not an added line", done.stderr)
+
+    def test_collapsed_rename_on_gitlab_18_4_says_no_patch(self):
+        for flags in ({"collapsed": True, "too_large": False}, {"too_large": True}):
+            state = gitlab_state()
+            state["routes"][f"GET {GL}/diffs?per_page=100"] = [
+                {"new_path": "app.py", "old_path": "old.py", "diff": "", "renamed_file": True, **flags}
+            ]
+            done, _ = self.run_vet(state, "check", GL_URL, review_body=review())
+            self.assertEqual(done.returncode, 1, flags)
+            self.assertIn("no patch", done.stderr)
+            self.assertNotIn("adds no line", done.stderr)
+
+    def test_collapsed_diff_before_gitlab_18_4_says_no_patch(self):
+        # The 18.3 shape, modes included: a new file's `a_mode` is "0", a deleted file's `b_mode`.
+        old = {"new_file": False, "renamed_file": False, "deleted_file": False, "a_mode": "100644", "b_mode": "100644"}
+        for entry in (
+            {"new_path": "app.py", "old_path": "app.py", "diff": "", **old},
+            {"new_path": "app.py", "old_path": "app.py", "diff": "", **old, "new_file": True, "a_mode": "0"},
+            {"new_path": "app.py", "old_path": "old.py", "diff": "", **old, "renamed_file": True},
+        ):
+            state = gitlab_state()
+            state["routes"][f"GET {GL}/diffs?per_page=100"] = [entry]
+            done, _ = self.run_vet(state, "check", GL_URL, review_body=review())
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("no patch", done.stderr)
+            self.assertNotIn("not an added line", done.stderr)
+
     def test_existing_drafts_block_a_second_set_unless_replacing(self):
         staged = gitlab_state(drafts=[{"id": 5, "note": "old"}])
         done, state = self.run_vet(staged, "draft", GL_URL, review_body=review())

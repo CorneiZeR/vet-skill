@@ -424,7 +424,9 @@ UI. Submitting from the web UI themselves is just as good, and needs nothing fro
 - There is one pending review per user per pull request.
 - The forge sends no `patch` for very large files. Nothing in them can be anchored, so they
   go in the summary. GitLab does the same with an empty `diff` for a collapsed or too-large
-  file; `$VET` reports both as "no patch", not as a bad anchor.
+  file; `$VET` reports both as "no patch", not as a bad anchor. A file the change adds no line
+  to goes in the summary the same way, and `check` says so; a pure rename on GitHub has no
+  `patch` and is reported as "no patch".
 
 **Git**
 - A clean `git merge-tree` exit 1 also means "not something we can merge". Only `CONFLICT`

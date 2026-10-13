@@ -311,8 +311,7 @@ class GitLab(Forge):
                 continue
             diff = entry.get("diff") or ""
             lines = parse_patch(diff, old_path=entry["old_path"])
-            # A collapsed or too-large diff comes back as an empty string, not as an error.
-            lines.patch_missing = bool(entry.get("too_large") or entry.get("collapsed") or not diff.strip())
+            lines.patch_missing = _gitlab_patch_withheld(entry, diff=diff)
             files[entry["new_path"]] = lines
         return files
 
@@ -643,6 +642,9 @@ def problems_with(
         if lines.patch_missing:
             problems.append(f"{where}: the forge sends no patch for this file, so no line can be anchored; use the summary")
             continue
+        if not lines.added:
+            problems.append(f"{where}: the change adds no line to this file, so no line can be anchored; use the summary")
+            continue
         if comment.get("line") not in lines.added:
             problems.append(f"{where}: not an added line; anchor on the nearest added line and name the real one")
         start = comment.get("start_line")
@@ -670,6 +672,17 @@ def problems_with(
             problems.append(f"{where}: a link into this repository pinned to {ref}, not to the full reviewed tip")
     problems += forge.forge_problems(review)
     return problems, warnings
+
+
+def _gitlab_patch_withheld(entry: dict[str, Any], *, diff: str) -> bool:
+    """Whether GitLab sent an empty `diff` for a file whose changes it did not include."""
+    # GitLab 18.4 added `collapsed` and `too_large`; before it, a withheld diff is only an empty string.
+    # https://gitlab.com/gitlab-org/gitlab/-/blob/df4cf0a439272ac3aeb8228283c82d926584aaa0/doc/api/merge_requests.md#L2340
+    if "collapsed" in entry or "too_large" in entry:
+        return bool(entry.get("collapsed") or entry.get("too_large"))
+    # Without the flags a pure rename and a collapsed rename with edits look the same, and a new
+    #  file's `a_mode` is "0", so neither renames nor modes can tell a complete empty diff apart.
+    return not diff.strip()
 
 
 def _repository_key(url: str) -> str:

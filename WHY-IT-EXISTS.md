@@ -84,7 +84,12 @@ lines. → *`draft`*
 
 **An empty patch is "no patch", not a bad anchor.** GitLab returns an empty `diff` for a
 collapsed or too-large file. 0.1.0 reported every comment on such a file as "not an added line",
-which sent the reviewer hunting for the wrong problem. → *`check`*
+which sent the reviewer hunting for the wrong problem. A rename or a mode change with no content
+change sends an empty `diff` too, and that one is complete, but adds no line to anchor on, so
+`check` points at the summary as for a missing patch, saying why. GitLab 18.4 added `collapsed`
+and `too_large` flags, which tell the two apart and are trusted when present. An older GitLab
+sends neither, and there a collapsed rename with edits looks like a pure one, so an empty `diff`
+still means "no patch". → *`check`*
 
 **Drafts, and publishing as a separate act.** The predecessor of this skill posted directly.
 Writing to somebody else's request cannot be taken back, and the person running the review
