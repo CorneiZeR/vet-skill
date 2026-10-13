@@ -55,7 +55,19 @@ _GITLAB_URL = re.compile(r"^https://(?P<host>[^/]+)/(?P<project>.+?)/-/merge_req
 _GITHUB_URL = re.compile(r"^https://(?P<host>[^/]+)/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)")
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
 _ATTRIBUTION = re.compile(r"Generated with \[?Claude|Co-Authored-By:\s*Claude|\N{ROBOT FACE}", re.IGNORECASE)
-_BLOB_LINK = re.compile(r"(?P<repo>https?://[^\s()<>\[\]\"']+?)(?:/-)?/blob/(?P<sha>[0-9a-f]{7,40})/")
+_URL = re.compile(r"https?://[^\s()<>\[\]\"']+", re.IGNORECASE)
+# A fence, in a list or on its marker line too, or a code span quotes a file, and its links are the file's.
+#  A fence closes on a bare run of its own character at least as long, and only a backtick fence
+#  refuses a backtick in its info string, as in CommonMark:
+#  https://spec.commonmark.org/0.31.2/#fenced-code-blocks
+_CODE = re.compile(
+    r"^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*"
+    r"(?:(?P<ticks>```+)[^`\n]*$.*?^[ \t]*(?P=ticks)`*|(?P<tildes>~~~+)[^\n]*$.*?^[ \t]*(?P=tildes)~*)[ \t\r]*$"
+    r"|`[^`\n]*`",
+    re.DOTALL | re.MULTILINE,
+)
+# Scheme, `www.` and case do not change which repository a link opens.
+_REPOSITORY_SPELLING = re.compile(r"^https?://(?:www\.)?", re.IGNORECASE)
 _REQUEST_SUFFIX = re.compile(r"(?:/-/merge_requests|/pull)/\d+.*$")
 _SUGGESTION_FENCE = re.compile(r"^\s*```suggestion(?P<range>\S*)\s*$", re.MULTILINE)
 _CODERABBIT_NOISE = re.compile(
@@ -600,7 +612,7 @@ def problems_with(
     """Everything that stops a review from being staged, and everything merely worth a look."""
     problems: list[str] = []
     warnings: list[str] = []
-    repository = _REQUEST_SUFFIX.sub("", request.url)
+    repository = _repository_key(_REQUEST_SUFFIX.sub("", request.url))
     if not request.is_open:
         problems.append(f"{request.url} is not open")
     if review.get("head_sha") != request.head_sha:
@@ -654,11 +666,30 @@ def problems_with(
         if len(body) > _GITHUB_BODY_LIMIT:
             problems.append(f"{where}: {len(body)} characters; the forge limit is about {_GITHUB_BODY_LIMIT}")
         # Only this repository's links must point at the tip; a permalink elsewhere is evidence.
-        for link in _BLOB_LINK.finditer(body):
-            if link["repo"].lower() == repository.lower() and link["sha"] != request.head_sha:
-                problems.append(f"{where}: a link into this repository pinned to {link['sha']}, not to the full reviewed tip")
+        for ref in stale_link_refs(body, repository=repository, head_sha=request.head_sha):
+            problems.append(f"{where}: a link into this repository pinned to {ref}, not to the full reviewed tip")
     problems += forge.forge_problems(review)
     return problems, warnings
+
+
+def _repository_key(url: str) -> str:
+    return _REPOSITORY_SPELLING.sub("", url).lower()
+
+
+def stale_link_refs(body: str, *, repository: str, head_sha: str) -> list[str]:
+    """The ref of every blob link into `repository` that is not the reviewed tip."""
+    # A prefix, not a pattern: a pattern stops at the first `/blob/`, which can be an owner's name.
+    prefixes = (f"{repository}/blob/", f"{repository}/-/blob/")
+    refs = []
+    for url in _URL.findall(_CODE.sub("", body)):
+        spelled = _REPOSITORY_SPELLING.sub("", url)
+        prefix = next((p for p in prefixes if spelled.lower().startswith(p)), None)
+        if prefix is None:
+            continue
+        ref = spelled[len(prefix) :].split("/")[0]
+        if ref.lower() != head_sha.lower():
+            refs.append(ref)
+    return refs
 
 
 def _load(path: str) -> dict[str, Any]:

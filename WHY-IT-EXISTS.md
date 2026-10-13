@@ -96,6 +96,13 @@ edited draft, or one deleted and another added, passed. → *Publishing*
 that was not the reviewed head. That included permalinks into other repositories, which are
 exactly the evidence the proof rule asks for. → *step 7*
 
+**A link on a branch is stale too.** 0.2.1 matched only hex refs, so `blob/main/` into this
+repository passed, though the line it points at moves with every push. The repository is matched
+as a prefix, with scheme, `www.` and case ignored: a `http://www.` spelling is still this
+repository, and an owner named `blob` beside a hex-looking repository name does not end the
+match early, as a pattern accepting any ref would. A link inside a code block or a code span is a
+quote of the file, as in a `suggestion`, and is not checked. → *step 7*
+
 **The summary does not retell the inline comments.** Every inline comment already notifies the
 author and sits on its line. A summary that repeats them doubles the reading and buries the few
 things that have no line to sit on. → *step 7*

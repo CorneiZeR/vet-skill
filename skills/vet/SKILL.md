@@ -295,8 +295,9 @@ in `$RUN/wt`.
    `<details><summary>Reproduction</summary>…</details>`
 
 Links into the reviewed repository are pinned to the reviewed tip, three at most; `$VET`
-refuses one pinned to another commit. A permalink into another repository (a library, an
-upstream fix) is evidence and is left alone.
+refuses one pinned to another commit or to a branch. A permalink into another repository
+(a library, an upstream fix) is evidence and is left alone, and so is a link inside a code
+block or a code span, which quotes the file.
 
 **The summary holds only what the inline comments cannot:**
 - the verdict;
@@ -328,7 +329,7 @@ python3 -I $VET draft '<URL>' "$RUN/review.json"
 - an anchor is not an added line;
 - two comments sit on one line;
 - an attribution line appears;
-- a link into this repository is pinned to another commit;
+- a `blob` link into this repository is pinned to another commit or to a branch;
 - a GitLab reply names an unknown thread, or a GitHub reply is staged at all;
 - drafts are already staged.
 

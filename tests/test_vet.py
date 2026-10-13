@@ -174,6 +174,74 @@ class VetTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("not to the full reviewed tip", done.stderr)
 
+    def test_link_into_this_repository_spelled_differently_is_still_this_repository(self):
+        for spelling in ("http://www.github.com/O/R", "HTTPS://WWW.GITHUB.COM/o/r"):
+            linked = review(summary=f"See [x]({spelling}/blob/{OLD}/app.py#L2).")
+            done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=linked)
+            self.assertEqual(done.returncode, 1, spelling)
+            self.assertIn("not to the full reviewed tip", done.stderr)
+
+    def test_link_into_this_repository_on_a_branch_is_refused(self):
+        linked = review(summary="See [x](https://github.com/o/r/blob/main/app.py#L2).")
+        done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=linked)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("pinned to main", done.stderr)
+
+        tip = review(summary=f"See [x](https://github.com/o/r/blob/{HEAD}/app.py#L2).")
+        done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=tip)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_repository_named_blob_is_still_checked(self):
+        # `blob/cafe123` reads as a hex ref to a pattern, which then takes `github.com` for the repository.
+        for repository in ("github.com/o/blob", "github.com/blob/cafe123", "gitlab.com/g/blob"):
+            sep = "/-/blob/" if repository.startswith("gitlab") else "/blob/"
+            stale = f"See [x](https://{repository}{sep}{OLD}/app.py#L2) and [y](https://{repository}{sep}{HEAD}/app.py)."
+            self.assertEqual(vet.stale_link_refs(stale, repository=repository, head_sha=HEAD), [OLD], repository)
+
+    def test_link_in_code_is_quoted_not_cited(self):
+        body = (
+            "Keep the badge:\n\n```suggestion\n[License](https://github.com/o/r/blob/main/LICENSE)\n```\n"
+            "and `https://github.com/o/r/blob/main/README.md` as it is.\n\n"
+            "- In a list:\n\n  ```suggestion\n  [License](https://github.com/o/r/blob/main/LICENSE)\n  ```\n"
+        )
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), [])
+
+    def test_code_span_opening_a_line_does_not_open_a_fence(self):
+        # A backtick fence's info string has no backtick, so this line is a span and the link is prose.
+        body = "- use\n  ```x``` is a span\n\nSee https://github.com/o/r/blob/main/app.py#L2.\n\n```\nq\n```\n"
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), ["main"])
+
+    def test_fence_closes_only_on_a_bare_run_of_its_own_character(self):
+        link = "https://github.com/o/r/blob/main/app.py#L2"
+        for name, body, expected in (
+            ("tilde fence", f"~~~\n{link}\n~~~\n", []),
+            ("four backticks", f"````suggestion\n{link}\n````\n", []),
+            ("longer closer", f"```\n{link}\n````\n", []),
+            ("longer fence holding a shorter one", f"````\n```\n{link}\n```\n````\n", []),
+            ("info string is content", f"```\na\n```python\n```\n\nSee {link}.\n\n```\nq\n```\n", ["main"]),
+            ("tilde is content of a backtick fence", f"```\na\n~~~\n```\n\nSee {link}.\n\n~~~\nq\n~~~\n", ["main"]),
+            ("closer with trailing space and CRLF", f"```\r\n{link}\r\n``` \r\n\r\nSee {link}.\r\n", ["main"]),
+            ("two backticks are no fence", f"``\n\nSee {link}.\n\n``\n", ["main"]),
+            ("two tildes are no fence", f"~~\n\nSee {link}.\n\n~~\n", ["main"]),
+            ("longer tilde closer", f"~~~\n{link}\n~~~~\n", []),
+            ("backticks are content of a tilde fence", f"~~~\na\n```\n~~~\n\nSee {link}.\n\n```\nq\n```\n", ["main"]),
+            ("tilde info string with a backtick", f"~~~ `x`\na\n~~~\n\nSee {link}.\n\n~~~\nq\n~~~\n", ["main"]),
+            ("fence on a list marker line", f"- ```\n  a\n  ```\n\nSee {link}.\n\n```\nq\n```\n", ["main"]),
+            ("fence on a numbered marker line", f"1. ```suggestion\n   {link}\n   ```\n", []),
+        ):
+            self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), expected, name)
+
+    def test_request_url_in_capitals_is_the_same_repository(self):
+        self.assertEqual(vet._repository_key("https://github.com/Owner/Repo"), "github.com/owner/repo")
+
+    def test_tip_in_capitals_is_still_the_tip(self):
+        body = f"See [x](https://github.com/o/r/blob/{HEAD.upper()}/app.py#L2)."
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), [])
+
+    def test_branch_with_a_slash_is_refused(self):
+        body = "See [x](https://github.com/o/r/blob/feature/x/app.py#L2)."
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), ["feature"])
+
     def test_permalink_into_another_repository_is_evidence_not_a_stale_anchor(self):
         linked = review(summary=f"Upstream does it at [lib](https://github.com/other/lib/blob/{OLD}/x.py#L9).")
         done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=linked)

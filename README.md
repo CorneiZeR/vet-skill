@@ -51,7 +51,7 @@ before anything is written:
 | An inline comment on a line the change did not add | the forge rejects it, or anchors it somewhere else |
 | A second set of drafts beside an existing one | `--replace-drafts`, and only with your word |
 | A comment where our own open thread already sits | reply there instead |
-| A link into the reviewed repository pinned to any commit but the tip | the line it points at has moved; permalinks to other repositories are left alone |
+| A `blob` link into the reviewed repository pinned to anything but the tip, a branch included | the line it points at has moved; permalinks to other repositories are left alone |
 | An attribution line (`Generated with Claude`, `Co-Authored-By: Claude`) | the review is yours |
 
 It never approves, requests changes, merges, pushes, or resolves a thread.
