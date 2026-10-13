@@ -68,6 +68,7 @@ _CODE = re.compile(
 )
 # Scheme, `www.` and case do not change which repository a link opens.
 _REPOSITORY_SPELLING = re.compile(r"^https?://(?:www\.)?", re.IGNORECASE)
+_FINGERPRINT = re.compile(r"\d+-[0-9a-f]{12}")
 _REQUEST_SUFFIX = re.compile(r"(?:/-/merge_requests|/pull)/\d+.*$")
 _SUGGESTION_FENCE = re.compile(r"^\s*```suggestion(?P<range>\S*)\s*$", re.MULTILINE)
 _CODERABBIT_NOISE = re.compile(
@@ -841,6 +842,14 @@ def cmd_publish(forge: Forge, args: argparse.Namespace) -> None:
     _say(f"published {len(drafts)} drafts on {forge.request().url}")
 
 
+def _fingerprint_argument(value: str) -> str:
+    # A bare count, what an approval looked like before fingerprints, would otherwise be refused as an edit.
+    if not _FINGERPRINT.fullmatch(value):
+        msg = f"{value!r} is not a fingerprint; `status` prints one, like 3-0123456789ab"
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="vet.py", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -853,7 +862,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("discard").add_argument("url")
     publish = sub.add_parser("publish")
     publish.add_argument("url")
-    publish.add_argument("--expect", required=True, help="the fingerprint `status` printed")
+    publish.add_argument("--expect", required=True, type=_fingerprint_argument, help="the fingerprint `status` printed")
     rabbit = sub.add_parser("coderabbit")
     rabbit.add_argument("worktree")
     rabbit.add_argument("--base", required=True, help="the merge base commit")

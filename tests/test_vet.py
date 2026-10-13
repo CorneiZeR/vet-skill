@@ -382,6 +382,13 @@ class VetTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(state["writes"][0]["path"].endswith("/draft_notes/bulk_publish"))
 
+    def test_publish_refuses_a_bare_count_as_not_a_fingerprint(self):
+        for expect in ("1", "1-cda2f76b97b", "1-cda2f76b97b1f"):
+            done, state = self.run_vet(gitlab_state(drafts=[{"id": 5, "note": "a"}]), "publish", GL_URL, "--expect", expect)
+            self.assertEqual(done.returncode, 2, expect)
+            self.assertIn("is not a fingerprint", done.stderr)
+            self.assertEqual(state.get("writes", []), [])
+
     def test_github_publish_submits_as_comment(self):
         pending = github_state(
             reviews=[{"id": 900, "state": "PENDING", "user": {"login": "me"}, "body": "S", "comments": []}]
