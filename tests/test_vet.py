@@ -174,6 +174,74 @@ class VetTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("not to the full reviewed tip", done.stderr)
 
+    def test_link_into_this_repository_spelled_differently_is_still_this_repository(self):
+        for spelling in ("http://www.github.com/O/R", "HTTPS://WWW.GITHUB.COM/o/r"):
+            linked = review(summary=f"See [x]({spelling}/blob/{OLD}/app.py#L2).")
+            done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=linked)
+            self.assertEqual(done.returncode, 1, spelling)
+            self.assertIn("not to the full reviewed tip", done.stderr)
+
+    def test_link_into_this_repository_on_a_branch_is_refused(self):
+        linked = review(summary="See [x](https://github.com/o/r/blob/main/app.py#L2).")
+        done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=linked)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("pinned to main", done.stderr)
+
+        tip = review(summary=f"See [x](https://github.com/o/r/blob/{HEAD}/app.py#L2).")
+        done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=tip)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_repository_named_blob_is_still_checked(self):
+        # `blob/cafe123` reads as a hex ref to a pattern, which then takes `github.com` for the repository.
+        for repository in ("github.com/o/blob", "github.com/blob/cafe123", "gitlab.com/g/blob"):
+            sep = "/-/blob/" if repository.startswith("gitlab") else "/blob/"
+            stale = f"See [x](https://{repository}{sep}{OLD}/app.py#L2) and [y](https://{repository}{sep}{HEAD}/app.py)."
+            self.assertEqual(vet.stale_link_refs(stale, repository=repository, head_sha=HEAD), [OLD], repository)
+
+    def test_link_in_code_is_quoted_not_cited(self):
+        body = (
+            "Keep the badge:\n\n```suggestion\n[License](https://github.com/o/r/blob/main/LICENSE)\n```\n"
+            "and `https://github.com/o/r/blob/main/README.md` as it is.\n\n"
+            "- In a list:\n\n  ```suggestion\n  [License](https://github.com/o/r/blob/main/LICENSE)\n  ```\n"
+        )
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), [])
+
+    def test_code_span_opening_a_line_does_not_open_a_fence(self):
+        # A backtick fence's info string has no backtick, so this line is a span and the link is prose.
+        body = "- use\n  ```x``` is a span\n\nSee https://github.com/o/r/blob/main/app.py#L2.\n\n```\nq\n```\n"
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), ["main"])
+
+    def test_fence_closes_only_on_a_bare_run_of_its_own_character(self):
+        link = "https://github.com/o/r/blob/main/app.py#L2"
+        for name, body, expected in (
+            ("tilde fence", f"~~~\n{link}\n~~~\n", []),
+            ("four backticks", f"````suggestion\n{link}\n````\n", []),
+            ("longer closer", f"```\n{link}\n````\n", []),
+            ("longer fence holding a shorter one", f"````\n```\n{link}\n```\n````\n", []),
+            ("info string is content", f"```\na\n```python\n```\n\nSee {link}.\n\n```\nq\n```\n", ["main"]),
+            ("tilde is content of a backtick fence", f"```\na\n~~~\n```\n\nSee {link}.\n\n~~~\nq\n~~~\n", ["main"]),
+            ("closer with trailing space and CRLF", f"```\r\n{link}\r\n``` \r\n\r\nSee {link}.\r\n", ["main"]),
+            ("two backticks are no fence", f"``\n\nSee {link}.\n\n``\n", ["main"]),
+            ("two tildes are no fence", f"~~\n\nSee {link}.\n\n~~\n", ["main"]),
+            ("longer tilde closer", f"~~~\n{link}\n~~~~\n", []),
+            ("backticks are content of a tilde fence", f"~~~\na\n```\n~~~\n\nSee {link}.\n\n```\nq\n```\n", ["main"]),
+            ("tilde info string with a backtick", f"~~~ `x`\na\n~~~\n\nSee {link}.\n\n~~~\nq\n~~~\n", ["main"]),
+            ("fence on a list marker line", f"- ```\n  a\n  ```\n\nSee {link}.\n\n```\nq\n```\n", ["main"]),
+            ("fence on a numbered marker line", f"1. ```suggestion\n   {link}\n   ```\n", []),
+        ):
+            self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), expected, name)
+
+    def test_request_url_in_capitals_is_the_same_repository(self):
+        self.assertEqual(vet._repository_key("https://github.com/Owner/Repo"), "github.com/owner/repo")
+
+    def test_tip_in_capitals_is_still_the_tip(self):
+        body = f"See [x](https://github.com/o/r/blob/{HEAD.upper()}/app.py#L2)."
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), [])
+
+    def test_branch_with_a_slash_is_refused(self):
+        body = "See [x](https://github.com/o/r/blob/feature/x/app.py#L2)."
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), ["feature"])
+
     def test_permalink_into_another_repository_is_evidence_not_a_stale_anchor(self):
         linked = review(summary=f"Upstream does it at [lib](https://github.com/other/lib/blob/{OLD}/x.py#L9).")
         done, _ = self.run_vet(github_state(), "check", GH_URL, review_body=linked)
@@ -193,6 +261,49 @@ class VetTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("no patch", done.stderr)
         self.assertNotIn("not an added line", done.stderr)
+
+    def test_gitlab_file_adding_no_line_points_at_the_summary_not_at_a_missing_patch(self):
+        flags = {"collapsed": False, "too_large": False}
+        for entry in (
+            {"new_path": "app.py", "old_path": "old.py", "diff": "", "renamed_file": True, **flags},
+            {"new_path": "app.py", "old_path": "app.py", "diff": "", "a_mode": "100644", "b_mode": "100755", **flags},
+            {"new_path": "app.py", "old_path": "app.py", "diff": "@@ -1,3 +1,2 @@\n a\n-b\n c\n", **flags},
+            {"new_path": "app.py", "old_path": "old.py", "diff": "", "renamed_file": True, "too_large": False},
+            {"new_path": "app.py", "old_path": "old.py", "diff": "", "renamed_file": True, "collapsed": False},
+        ):
+            state = gitlab_state()
+            state["routes"][f"GET {GL}/diffs?per_page=100"] = [entry]
+            done, _ = self.run_vet(state, "check", GL_URL, review_body=review())
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("adds no line to this file", done.stderr)
+            self.assertNotIn("no patch", done.stderr)
+            self.assertNotIn("not an added line", done.stderr)
+
+    def test_collapsed_rename_on_gitlab_18_4_says_no_patch(self):
+        for flags in ({"collapsed": True, "too_large": False}, {"too_large": True}):
+            state = gitlab_state()
+            state["routes"][f"GET {GL}/diffs?per_page=100"] = [
+                {"new_path": "app.py", "old_path": "old.py", "diff": "", "renamed_file": True, **flags}
+            ]
+            done, _ = self.run_vet(state, "check", GL_URL, review_body=review())
+            self.assertEqual(done.returncode, 1, flags)
+            self.assertIn("no patch", done.stderr)
+            self.assertNotIn("adds no line", done.stderr)
+
+    def test_collapsed_diff_before_gitlab_18_4_says_no_patch(self):
+        # The 18.3 shape, modes included: a new file's `a_mode` is "0", a deleted file's `b_mode`.
+        old = {"new_file": False, "renamed_file": False, "deleted_file": False, "a_mode": "100644", "b_mode": "100644"}
+        for entry in (
+            {"new_path": "app.py", "old_path": "app.py", "diff": "", **old},
+            {"new_path": "app.py", "old_path": "app.py", "diff": "", **old, "new_file": True, "a_mode": "0"},
+            {"new_path": "app.py", "old_path": "old.py", "diff": "", **old, "renamed_file": True},
+        ):
+            state = gitlab_state()
+            state["routes"][f"GET {GL}/diffs?per_page=100"] = [entry]
+            done, _ = self.run_vet(state, "check", GL_URL, review_body=review())
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("no patch", done.stderr)
+            self.assertNotIn("not an added line", done.stderr)
 
     def test_existing_drafts_block_a_second_set_unless_replacing(self):
         staged = gitlab_state(drafts=[{"id": 5, "note": "old"}])
@@ -270,6 +381,13 @@ class VetTest(unittest.TestCase):
         done, state = self.run_vet(staged, "publish", GL_URL, "--expect", approved)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(state["writes"][0]["path"].endswith("/draft_notes/bulk_publish"))
+
+    def test_publish_refuses_a_bare_count_as_not_a_fingerprint(self):
+        for expect in ("1", "1-cda2f76b97b", "1-cda2f76b97b1f"):
+            done, state = self.run_vet(gitlab_state(drafts=[{"id": 5, "note": "a"}]), "publish", GL_URL, "--expect", expect)
+            self.assertEqual(done.returncode, 2, expect)
+            self.assertIn("is not a fingerprint", done.stderr)
+            self.assertEqual(state.get("writes", []), [])
 
     def test_github_publish_submits_as_comment(self):
         pending = github_state(

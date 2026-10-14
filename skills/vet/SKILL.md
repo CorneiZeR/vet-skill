@@ -185,8 +185,9 @@ What it does, and why:
    call it noise. A relevance "yes" never outvotes a refutation; that is how a false claim
    would reach the request. The verifier also corrects the line number.
 
-   A verifier that returns nothing (skipped, or died) is not a refutation. The finding stays
-   as a **question** and the run logs it, rather than letting it vanish.
+   A correctness verifier that returns nothing (skipped, or died) is not a refutation. The
+   finding stays as a **question** and the run logs it, rather than letting it vanish; the
+   relevance verdict still applies to it.
 4. **Prove.** Every surviving blocker and should-fix is reproduced by a command in the
    prover's own worktree: a failing test, a script, the build, a grep that comes back
    non-empty. The output is kept verbatim. A finding that nothing reproduces becomes a
@@ -295,8 +296,9 @@ in `$RUN/wt`.
    `<details><summary>Reproduction</summary>…</details>`
 
 Links into the reviewed repository are pinned to the reviewed tip, three at most; `$VET`
-refuses one pinned to another commit. A permalink into another repository (a library, an
-upstream fix) is evidence and is left alone.
+refuses one pinned to another commit or to a branch. A permalink into another repository
+(a library, an upstream fix) is evidence and is left alone, and so is a link inside a code
+block or a code span, which quotes the file.
 
 **The summary holds only what the inline comments cannot:**
 - the verdict;
@@ -328,7 +330,7 @@ python3 -I $VET draft '<URL>' "$RUN/review.json"
 - an anchor is not an added line;
 - two comments sit on one line;
 - an attribution line appears;
-- a link into this repository is pinned to another commit;
+- a `blob` link into this repository is pinned to another commit or to a branch;
 - a GitLab reply names an unknown thread, or a GitHub reply is staged at all;
 - drafts are already staged.
 
@@ -422,7 +424,9 @@ UI. Submitting from the web UI themselves is just as good, and needs nothing fro
 - There is one pending review per user per pull request.
 - The forge sends no `patch` for very large files. Nothing in them can be anchored, so they
   go in the summary. GitLab does the same with an empty `diff` for a collapsed or too-large
-  file; `$VET` reports both as "no patch", not as a bad anchor.
+  file; `$VET` reports both as "no patch", not as a bad anchor. A file the change adds no line
+  to goes in the summary the same way, and `check` says so; a pure rename on GitHub has no
+  `patch` and is reported as "no patch".
 
 **Git**
 - A clean `git merge-tree` exit 1 also means "not something we can merge". Only `CONFLICT`

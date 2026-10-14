@@ -55,7 +55,20 @@ _GITLAB_URL = re.compile(r"^https://(?P<host>[^/]+)/(?P<project>.+?)/-/merge_req
 _GITHUB_URL = re.compile(r"^https://(?P<host>[^/]+)/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)")
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
 _ATTRIBUTION = re.compile(r"Generated with \[?Claude|Co-Authored-By:\s*Claude|\N{ROBOT FACE}", re.IGNORECASE)
-_BLOB_LINK = re.compile(r"(?P<repo>https?://[^\s()<>\[\]\"']+?)(?:/-)?/blob/(?P<sha>[0-9a-f]{7,40})/")
+_URL = re.compile(r"https?://[^\s()<>\[\]\"']+", re.IGNORECASE)
+# A fence, in a list or on its marker line too, or a code span quotes a file, and its links are the file's.
+#  A fence closes on a bare run of its own character at least as long, and only a backtick fence
+#  refuses a backtick in its info string, as in CommonMark:
+#  https://spec.commonmark.org/0.31.2/#fenced-code-blocks
+_CODE = re.compile(
+    r"^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*"
+    r"(?:(?P<ticks>```+)[^`\n]*$.*?^[ \t]*(?P=ticks)`*|(?P<tildes>~~~+)[^\n]*$.*?^[ \t]*(?P=tildes)~*)[ \t\r]*$"
+    r"|`[^`\n]*`",
+    re.DOTALL | re.MULTILINE,
+)
+# Scheme, `www.` and case do not change which repository a link opens.
+_REPOSITORY_SPELLING = re.compile(r"^https?://(?:www\.)?", re.IGNORECASE)
+_FINGERPRINT = re.compile(r"\d+-[0-9a-f]{12}")
 _REQUEST_SUFFIX = re.compile(r"(?:/-/merge_requests|/pull)/\d+.*$")
 _SUGGESTION_FENCE = re.compile(r"^\s*```suggestion(?P<range>\S*)\s*$", re.MULTILINE)
 _CODERABBIT_NOISE = re.compile(
@@ -299,8 +312,7 @@ class GitLab(Forge):
                 continue
             diff = entry.get("diff") or ""
             lines = parse_patch(diff, old_path=entry["old_path"])
-            # A collapsed or too-large diff comes back as an empty string, not as an error.
-            lines.patch_missing = bool(entry.get("too_large") or entry.get("collapsed") or not diff.strip())
+            lines.patch_missing = _gitlab_patch_withheld(entry, diff=diff)
             files[entry["new_path"]] = lines
         return files
 
@@ -600,7 +612,7 @@ def problems_with(
     """Everything that stops a review from being staged, and everything merely worth a look."""
     problems: list[str] = []
     warnings: list[str] = []
-    repository = _REQUEST_SUFFIX.sub("", request.url)
+    repository = _repository_key(_REQUEST_SUFFIX.sub("", request.url))
     if not request.is_open:
         problems.append(f"{request.url} is not open")
     if review.get("head_sha") != request.head_sha:
@@ -631,6 +643,9 @@ def problems_with(
         if lines.patch_missing:
             problems.append(f"{where}: the forge sends no patch for this file, so no line can be anchored; use the summary")
             continue
+        if not lines.added:
+            problems.append(f"{where}: the change adds no line to this file, so no line can be anchored; use the summary")
+            continue
         if comment.get("line") not in lines.added:
             problems.append(f"{where}: not an added line; anchor on the nearest added line and name the real one")
         start = comment.get("start_line")
@@ -654,11 +669,41 @@ def problems_with(
         if len(body) > _GITHUB_BODY_LIMIT:
             problems.append(f"{where}: {len(body)} characters; the forge limit is about {_GITHUB_BODY_LIMIT}")
         # Only this repository's links must point at the tip; a permalink elsewhere is evidence.
-        for link in _BLOB_LINK.finditer(body):
-            if link["repo"].lower() == repository.lower() and link["sha"] != request.head_sha:
-                problems.append(f"{where}: a link into this repository pinned to {link['sha']}, not to the full reviewed tip")
+        for ref in stale_link_refs(body, repository=repository, head_sha=request.head_sha):
+            problems.append(f"{where}: a link into this repository pinned to {ref}, not to the full reviewed tip")
     problems += forge.forge_problems(review)
     return problems, warnings
+
+
+def _gitlab_patch_withheld(entry: dict[str, Any], *, diff: str) -> bool:
+    """Whether GitLab sent an empty `diff` for a file whose changes it did not include."""
+    # GitLab 18.4 added `collapsed` and `too_large`; before it, a withheld diff is only an empty string.
+    # https://gitlab.com/gitlab-org/gitlab/-/blob/df4cf0a439272ac3aeb8228283c82d926584aaa0/doc/api/merge_requests.md#L2340
+    if "collapsed" in entry or "too_large" in entry:
+        return bool(entry.get("collapsed") or entry.get("too_large"))
+    # Without the flags a pure rename and a collapsed rename with edits look the same, and a new
+    #  file's `a_mode` is "0", so neither renames nor modes can tell a complete empty diff apart.
+    return not diff.strip()
+
+
+def _repository_key(url: str) -> str:
+    return _REPOSITORY_SPELLING.sub("", url).lower()
+
+
+def stale_link_refs(body: str, *, repository: str, head_sha: str) -> list[str]:
+    """The ref of every blob link into `repository` that is not the reviewed tip."""
+    # A prefix, not a pattern: a pattern stops at the first `/blob/`, which can be an owner's name.
+    prefixes = (f"{repository}/blob/", f"{repository}/-/blob/")
+    refs = []
+    for url in _URL.findall(_CODE.sub("", body)):
+        spelled = _REPOSITORY_SPELLING.sub("", url)
+        prefix = next((p for p in prefixes if spelled.lower().startswith(p)), None)
+        if prefix is None:
+            continue
+        ref = spelled[len(prefix) :].split("/")[0]
+        if ref.lower() != head_sha.lower():
+            refs.append(ref)
+    return refs
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -797,6 +842,14 @@ def cmd_publish(forge: Forge, args: argparse.Namespace) -> None:
     _say(f"published {len(drafts)} drafts on {forge.request().url}")
 
 
+def _fingerprint_argument(value: str) -> str:
+    # A bare count, what an approval looked like before fingerprints, would otherwise be refused as an edit.
+    if not _FINGERPRINT.fullmatch(value):
+        msg = f"{value!r} is not a fingerprint; `status` prints one, like 3-0123456789ab"
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="vet.py", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -809,7 +862,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("discard").add_argument("url")
     publish = sub.add_parser("publish")
     publish.add_argument("url")
-    publish.add_argument("--expect", required=True, help="the fingerprint `status` printed")
+    publish.add_argument("--expect", required=True, type=_fingerprint_argument, help="the fingerprint `status` printed")
     rabbit = sub.add_parser("coderabbit")
     rabbit.add_argument("worktree")
     rabbit.add_argument("--base", required=True, help="the merge base commit")

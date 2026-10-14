@@ -19,7 +19,9 @@ whenever its topic was relevant. → *step Verify*
 
 **A verifier that died is not a refutation.** In 0.1.0 a missing correctness verdict marked the
 finding as not surviving, with nothing in the log. A real defect could vanish because an agent
-did. → *step Verify*
+did. 0.2.1 overcorrected: such a finding survived even when relevance called it noise, so a
+dead correctness verifier let noise through. It now stays as a question only if relevance keeps
+it, and the log says which. → *step Verify*
 
 **Dedup before verification.** Without it, two lenses that reported one defect got two
 verifications, which came back with opposite verdicts on the same line. → *step Dedup*
@@ -82,7 +84,12 @@ lines. → *`draft`*
 
 **An empty patch is "no patch", not a bad anchor.** GitLab returns an empty `diff` for a
 collapsed or too-large file. 0.1.0 reported every comment on such a file as "not an added line",
-which sent the reviewer hunting for the wrong problem. → *`check`*
+which sent the reviewer hunting for the wrong problem. A rename or a mode change with no content
+change sends an empty `diff` too, and that one is complete, but adds no line to anchor on, so
+`check` points at the summary as for a missing patch, saying why. GitLab 18.4 added `collapsed`
+and `too_large` flags, which tell the two apart and are trusted when present. An older GitLab
+sends neither, and there a collapsed rename with edits looks like a pure one, so an empty `diff`
+still means "no patch". → *`check`*
 
 **Drafts, and publishing as a separate act.** The predecessor of this skill posted directly.
 Writing to somebody else's request cannot be taken back, and the person running the review
@@ -95,6 +102,13 @@ edited draft, or one deleted and another added, passed. → *Publishing*
 **Only this repository's links must point at the tip.** 0.1.0 refused every `/blob/<sha>/` link
 that was not the reviewed head. That included permalinks into other repositories, which are
 exactly the evidence the proof rule asks for. → *step 7*
+
+**A link on a branch is stale too.** 0.2.1 matched only hex refs, so `blob/main/` into this
+repository passed, though the line it points at moves with every push. The repository is matched
+as a prefix, with scheme, `www.` and case ignored: a `http://www.` spelling is still this
+repository, and an owner named `blob` beside a hex-looking repository name does not end the
+match early, as a pattern accepting any ref would. A link inside a code block or a code span is a
+quote of the file, as in a `suggestion`, and is not checked. → *step 7*
 
 **The summary does not retell the inline comments.** Every inline comment already notifies the
 author and sits on its line. A summary that repeats them doubles the reading and buries the few
