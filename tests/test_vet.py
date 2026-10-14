@@ -206,6 +206,10 @@ class VetTest(unittest.TestCase):
         )
         self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), [])
 
+    def test_escaped_backtick_opens_no_code_span(self):
+        body = "Use \\`x and see https://github.com/o/r/blob/main/app.py#L2 then y\\` here."
+        self.assertEqual(vet.stale_link_refs(body, repository="github.com/o/r", head_sha=HEAD), ["main"])
+
     def test_code_span_opening_a_line_does_not_open_a_fence(self):
         # A backtick fence's info string has no backtick, so this line is a span and the link is prose.
         body = "- use\n  ```x``` is a span\n\nSee https://github.com/o/r/blob/main/app.py#L2.\n\n```\nq\n```\n"

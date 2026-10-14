@@ -227,7 +227,8 @@ const verifyAndProve = await pipeline(
         correctness: c,
         relevance: r,
         unverified: !c,
-        severity: !c ? 'question' : !c.refuted ? c.severity : f.severity,
+        // 'question' means kept but unproven; a finding relevance dropped is not one
+        severity: !c ? (survives ? 'question' : f.severity) : !c.refuted ? c.severity : f.severity,
         line: c && c.corrected_line ? c.corrected_line : f.line,
         survives,
       }

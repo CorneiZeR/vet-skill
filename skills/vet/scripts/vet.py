@@ -63,7 +63,7 @@ _URL = re.compile(r"https?://[^\s()<>\[\]\"']+", re.IGNORECASE)
 _CODE = re.compile(
     r"^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*"
     r"(?:(?P<ticks>```+)[^`\n]*$.*?^[ \t]*(?P=ticks)`*|(?P<tildes>~~~+)[^\n]*$.*?^[ \t]*(?P=tildes)~*)[ \t\r]*$"
-    r"|`[^`\n]*`",
+    r"|(?<!\\)`[^`\n]*`",
     re.DOTALL | re.MULTILINE,
 )
 # Scheme, `www.` and case do not change which repository a link opens.

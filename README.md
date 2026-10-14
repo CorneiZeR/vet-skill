@@ -140,6 +140,8 @@ The `review.json` format is in the script's docstring.
   `suggestion:-a+b`.
 - **Very large or collapsed files.** GitHub sends no patch and GitLab an empty diff for them, so
   nothing in them can be anchored; the check says so rather than calling the line wrong.
+- **Files the change adds no line to.** A pure rename, a mode change or a deletion-only edit has
+  nothing to anchor on; the check sends the comment to the summary and says why.
 - **More than 100 GitHub review threads.** Only the first 100 are read, and the script says so.
 
 ## Tests

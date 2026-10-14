@@ -21,7 +21,8 @@ whenever its topic was relevant. → *step Verify*
 finding as not surviving, with nothing in the log. A real defect could vanish because an agent
 did. 0.2.1 overcorrected: such a finding survived even when relevance called it noise, so a
 dead correctness verifier let noise through. It now stays as a question only if relevance keeps
-it, and the log says which. → *step Verify*
+it, and the log says which; a dropped one keeps its lens severity, since `question` means kept.
+→ *step Verify*
 
 **Dedup before verification.** Without it, two lenses that reported one defect got two
 verifications, which came back with opposite verdicts on the same line. → *step Dedup*
@@ -108,7 +109,8 @@ repository passed, though the line it points at moves with every push. The repos
 as a prefix, with scheme, `www.` and case ignored: a `http://www.` spelling is still this
 repository, and an owner named `blob` beside a hex-looking repository name does not end the
 match early, as a pattern accepting any ref would. A link inside a code block or a code span is a
-quote of the file, as in a `suggestion`, and is not checked. → *step 7*
+quote of the file, as in a `suggestion`, and is not checked. An escaped `` \` `` opens no span: 0.2.2
+took two of them for one and hid the link between. → *step 7*
 
 **The summary does not retell the inline comments.** Every inline comment already notifies the
 author and sits on its line. A summary that repeats them doubles the reading and buries the few
